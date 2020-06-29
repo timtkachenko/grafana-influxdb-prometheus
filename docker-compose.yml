@@ -1,4 +1,4 @@
-version: '2'
+version: '3.7'
 services:
   influxdb:
     image: influxdb:latest
@@ -10,6 +10,8 @@ services:
       - INFLUXDB_DB=db0
       - INFLUXDB_ADMIN_USER=${INFLUXDB_USERNAME}
       - INFLUXDB_ADMIN_PASSWORD=${INFLUXDB_PASSWORD}
+    network_mode: bridge
+
   chronograf:
     image: chronograf:latest
     ports:
@@ -18,10 +20,81 @@ services:
       - chronograf-storage:/var/lib/chronograf
     depends_on:
       - influxdb
+    links:
+      - influxdb
     environment:
       - INFLUXDB_URL=http://influxdb:8086
       - INFLUXDB_USERNAME=${INFLUXDB_USERNAME}
       - INFLUXDB_PASSWORD=${INFLUXDB_PASSWORD}
+    network_mode: bridge
+
+  telegraf:
+    image: telegraf:latest
+    container_name: telegraf
+    ports:
+      - '8125:8125/udp'
+    links:
+      - influxdb
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+    network_mode: bridge
+
+  kapacitor:
+    image: kapacitor:latest
+    environment:
+      KAPACITOR_HOSTNAME: kapacitor
+      KAPACITOR_INFLUXDB_0_URLS_0: http://influxdb:8086
+    volumes:
+      - ./data/kapacitor:/var/lib/kapacitor
+    depends_on:
+      - influxdb
+    links:
+      - influxdb
+    ports:
+      - "9092:9092"
+    network_mode: bridge
+
+####################################################################################################################
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    links:
+      - alertmanager:alertmanager
+      - pushgateway:pushgateway
+    network_mode: bridge
+
+  alertmanager:
+    image: prom/alertmanager:v0.12.0
+    ports:
+      - 9093:9093
+    volumes:
+      - ./alertmanager/:/etc/alertmanager/
+    command:
+      - '-config.file=/etc/alertmanager/config.yml'
+      - '-storage.path=/alertmanager'
+    network_mode: bridge
+
+  pushgateway:
+    image: prom/pushgateway:v1.2.0
+    container_name: pushgateway
+    expose:
+      - 9091
+    labels:
+      org.label-schema.group: "monitoring"
+    network_mode: bridge
+  #
   grafana:
     image: grafana/grafana:latest
     ports:
@@ -31,10 +104,17 @@ services:
       - ./grafana-provisioning/:/etc/grafana/provisioning
     depends_on:
       - influxdb
+    links:
+      - influxdb
+      - prometheus:prometheus
     environment:
-      - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    network_mode: bridge
+
 volumes:
+  prometheus_data:
   influxdb-storage:
   chronograf-storage:
   grafana-storage:
